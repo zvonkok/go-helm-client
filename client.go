@@ -193,25 +193,25 @@ func (c *HelmClient) UpdateChartRepos() error {
 
 // InstallOrUpgradeChart installs or upgrades the provided chart and returns the corresponding release.
 // Namespace and other context is provided via the helmclient.Options struct when instantiating a client.
-func (c *HelmClient) InstallOrUpgradeChart(ctx context.Context, spec *ChartSpec) (*release.Release, error) {
+func (c *HelmClient) InstallOrUpgradeChart(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error) {
 	exists, err := c.chartExists(spec)
 	if err != nil {
 		return nil, err
 	}
 
 	if exists {
-		return c.upgrade(ctx, spec)
+		return c.upgrade(ctx, spec, helmChart)
 	}
 
-	return c.install(ctx, spec)
+	return c.install(ctx, spec, helmChart)
 }
 
-func (c *HelmClient) InstallChart(ctx context.Context, spec *ChartSpec) (*release.Release, error) {
-	return c.install(ctx, spec)
+func (c *HelmClient) InstallChart(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error) {
+	return c.install(ctx, spec, helmChart)
 }
 
-func (c *HelmClient) UpgradeChart(ctx context.Context, spec *ChartSpec) (*release.Release, error) {
-	return c.upgrade(ctx, spec)
+func (c *HelmClient) UpgradeChart(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error) {
+	return c.upgrade(ctx, spec, helmChart)
 }
 
 // ListDeployedReleases lists all deployed releases.
@@ -254,7 +254,7 @@ func (c *HelmClient) UninstallReleaseByName(name string) error {
 
 // install installs the provided chart.
 // Optionally lints the chart if the linting flag is set.
-func (c *HelmClient) install(ctx context.Context, spec *ChartSpec) (*release.Release, error) {
+func (c *HelmClient) install(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error) {
 	client := action.NewInstall(c.ActionConfig)
 	mergeInstallOptions(spec, client)
 
@@ -266,9 +266,16 @@ func (c *HelmClient) install(ctx context.Context, spec *ChartSpec) (*release.Rel
 		client.PostRenderer = spec.PostRenderer
 	}
 
-	helmChart, chartPath, err := c.getChart(spec.ChartName, &client.ChartPathOptions)
-	if err != nil {
-		return nil, err
+	var err error
+	var chartPath string
+
+	if helmChart == nil {
+		helmChart, chartPath, err = c.getChart(spec.ChartName, &client.ChartPathOptions)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		chartPath = helmChart.ChartFullPath()
 	}
 
 	if helmChart.Metadata.Type != "" && helmChart.Metadata.Type != "application" {
@@ -323,7 +330,7 @@ func (c *HelmClient) install(ctx context.Context, spec *ChartSpec) (*release.Rel
 
 // upgrade upgrades a chart and CRDs.
 // Optionally lints the chart if the linting flag is set.
-func (c *HelmClient) upgrade(ctx context.Context, spec *ChartSpec) (*release.Release, error) {
+func (c *HelmClient) upgrade(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error) {
 	client := action.NewUpgrade(c.ActionConfig)
 	mergeUpgradeOptions(spec, client)
 	client.Install = true
@@ -335,10 +342,16 @@ func (c *HelmClient) upgrade(ctx context.Context, spec *ChartSpec) (*release.Rel
 	if spec.PostRenderer != nil {
 		client.PostRenderer = spec.PostRenderer
 	}
+	var err error
+	var chartPath string
 
-	helmChart, chartPath, err := c.getChart(spec.ChartName, &client.ChartPathOptions)
-	if err != nil {
-		return nil, err
+	if helmChart == nil {
+		helmChart, chartPath, err = c.getChart(spec.ChartName, &client.ChartPathOptions)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		chartPath = helmChart.ChartFullPath()
 	}
 
 	if req := helmChart.Metadata.Dependencies; req != nil {
@@ -369,6 +382,7 @@ func (c *HelmClient) upgrade(ctx context.Context, spec *ChartSpec) (*release.Rel
 
 	rel, err := client.RunWithContext(ctx, spec.ReleaseName, helmChart, values)
 	if err != nil {
+		fmt.Println("ERROR RUNWITHCONTEXT")
 		return rel, err
 	}
 
@@ -424,8 +438,32 @@ func (c *HelmClient) lint(chartPath string, values map[string]interface{}) error
 	return nil
 }
 
+// GetChart returns the constructed chart
+func (c *HelmClient) GetChart(spec *ChartSpec) (*chart.Chart, string, error) {
+
+	client := action.NewInstall(c.ActionConfig)
+	mergeInstallOptions(spec, client)
+
+	helmChart, chartPath, err := c.getChart(spec.ChartName, &client.ChartPathOptions)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return helmChart, chartPath, err
+}
+
 // TemplateChart returns a rendered version of the provided ChartSpec 'spec' by performing a "dry-run" install.
-func (c *HelmClient) TemplateChart(spec *ChartSpec) ([]byte, error) {
+func (c *HelmClient) TemplateChart(spec *ChartSpec, helmChart *chart.Chart) ([]byte, error) {
+
+	// Save and reset the KubeClient
+	// KubeClient will be set to the fake pringint client
+	kc := c.ActionConfig.KubeClient
+	c.ActionConfig.KubeClient = nil
+
+	defer func() {
+		c.ActionConfig.KubeClient = kc
+	}()
+
 	client := action.NewInstall(c.ActionConfig)
 	mergeInstallOptions(spec, client)
 
@@ -440,9 +478,16 @@ func (c *HelmClient) TemplateChart(spec *ChartSpec) ([]byte, error) {
 		client.Version = ">0.0.0-0"
 	}
 
-	helmChart, chartPath, err := c.getChart(spec.ChartName, &client.ChartPathOptions)
-	if err != nil {
-		return nil, err
+	var err error
+	var chartPath string
+
+	if helmChart == nil {
+		helmChart, chartPath, err = c.getChart(spec.ChartName, &client.ChartPathOptions)
+		if err != nil {
+			return nil, err
+		} else {
+			chartPath = helmChart.ChartFullPath()
+		}
 	}
 
 	if helmChart.Metadata.Type != "" && helmChart.Metadata.Type != "application" {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/repo"
 )
@@ -15,9 +16,9 @@ import (
 type Client interface {
 	AddOrUpdateChartRepo(entry repo.Entry) error
 	UpdateChartRepos() error
-	InstallOrUpgradeChart(ctx context.Context, spec *ChartSpec) (*release.Release, error)
-	InstallChart(ctx context.Context, spec *ChartSpec) (*release.Release, error)
-	UpgradeChart(ctx context.Context, spec *ChartSpec) (*release.Release, error)
+	InstallOrUpgradeChart(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error)
+	InstallChart(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error)
+	UpgradeChart(ctx context.Context, spec *ChartSpec, helmChart *chart.Chart) (*release.Release, error)
 	ListDeployedReleases() ([]*release.Release, error)
 	ListReleasesByStateMask(action.ListStates) ([]*release.Release, error)
 	GetRelease(name string) (*release.Release, error)
@@ -25,7 +26,8 @@ type Client interface {
 	GetReleaseValues(name string, allValues bool) (map[string]interface{}, error)
 	UninstallRelease(spec *ChartSpec) error
 	UninstallReleaseByName(name string) error
-	TemplateChart(spec *ChartSpec) ([]byte, error)
+	TemplateChart(spec *ChartSpec, helmChart *chart.Chart) ([]byte, error)
+	GetChart(spec *ChartSpec) (*chart.Chart, string, error)
 	LintChart(spec *ChartSpec) error
 	SetDebugLog(debugLog action.DebugLog)
 	ListReleaseHistory(name string, max int) ([]*release.Release, error)
